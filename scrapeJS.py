@@ -4,12 +4,12 @@
 __author__ = 'fi11222'
 
 import argparse
-import urllib.request
 import re
 import random
 import time
 import sys
 import os
+import shutil
 
 from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
@@ -94,16 +94,24 @@ def randomWait(p_minDelay, p_maxDelay):
         print('Waiting for {0:.2f} seconds ...'.format(l_wait))
         time.sleep(l_wait)
 
-def processLink(p_linkUrl, p_driver):
-    global g_acceptTC
+def processLink(p_article):
+    l_driver = getDriver()
 
-    print('Load url Link:', p_linkUrl)
+    l_linkUrl = p_article[0]
+    l_match = re.search(r'([^/]+\.pdf)$', l_linkUrl)
+    if l_match:
+        l_fileName = l_match.group(1)
+    else:
+        print('cannot find filename in [{0}] - ABORTING'.format(l_linkUrl))
+        sys.exit()
+
+    print('Load url Link:', l_linkUrl, '-->', l_fileName)
 
     # p_link.click()
-    p_driver.get(p_linkUrl)
+    l_driver.get(l_linkUrl)
 
     try:
-        l_accept = WebDriverWait(p_driver, 10).until(EC.presence_of_element_located(
+        l_accept = WebDriverWait(l_driver, 10).until(EC.presence_of_element_located(
             (By.XPATH, '//input[@id="acceptTC"]')))
 
         print('Click Accept TC')
@@ -115,14 +123,26 @@ def processLink(p_linkUrl, p_driver):
         print('Accept TC pop-up not found!!')
         sys.exit()
 
+    while not (os.path.isfile(l_fileName) and not os.path.isfile(l_fileName + '.part')):
+        time.sleep(1)
+    print('download of [{0}] complete'.format(l_fileName))
+
+    l_newFileName = re.sub(r'\W+', '_', p_article[1])[0:40] + '-' + \
+                    re.sub('\W+', '_', p_article[2])[0:40] + '.pdf'
+    l_newFileName = re.sub(r'_+', '_', l_newFileName)
+    print('renaming to:', l_newFileName)
+    os.rename(l_fileName, l_newFileName)
+
     randomWait(5, 10)
+
+    l_driver.close()
 
 # --------------------------------- Main section -----------------------------------------------------------------------
 if __name__ == "__main__":
     print('+------------------------------------------------------------+')
     print('| JSTOR Scraping                                             |')
     print('|                                                            |')
-    print('| v. 1.0 - 16/05/2016                                        |')
+    print('| v. 1.1 - 17/05/2016                                        |')
     print('+------------------------------------------------------------+')
 
     l_parser = argparse.ArgumentParser(description='Crawl JSTOR.'.format(g_url))
@@ -148,7 +168,11 @@ if __name__ == "__main__":
 
     l_driver.get(g_url.format(l_kwString + '&', 'ar=on&'))
 
-    l_linkList = []
+    l_csvFileName = re.sub('\W+', '_', c.keywords) + '.csv'
+    l_csvOut = open(l_csvFileName, 'w')
+    l_csvOut.write('"URL";"TITLE";"AUTHOR";"SOURCE"\n')
+
+    l_artList = []
     try:
         WebDriverWait(l_driver, 10).until(EC.presence_of_element_located(
             (By.XPATH, '//a[contains(@class, "pdfLink")]')))
@@ -157,13 +181,37 @@ if __name__ == "__main__":
 
         l_count = 0
         l_finished = False
-        l_linkList = []
         while not l_finished:
-            for l_link in l_driver.find_elements_by_xpath('//a[contains(@class, "pdfLink")]'):
-                l_linkUrl = l_link.get_attribute('href')
-                print('[{0:<4}] l_linkUrl:'.format(l_count), l_linkUrl)
+            for l_row in l_driver.find_elements_by_xpath('//li[@class="row result-item"]'):
 
-                l_linkList += [l_linkUrl]
+                l_link = l_row.find_element_by_xpath('.//a[contains(@class, "pdfLink")]')
+                # tt-track
+                l_title = l_row.find_element_by_xpath('.//a[contains(@class, "tt-track")]').text
+                l_linkUrl = l_link.get_attribute('href')
+
+                try:
+                    l_author = l_row.find_element_by_xpath('.//div[@class= "contrib"]').text
+                except Exception:
+                    l_author = ''
+
+                try:
+                    l_source = l_row.find_element_by_xpath('.//div[@class= "src"]').text
+                except Exception:
+                    l_source = ''
+
+                if len(l_title) > 50:
+                    l_titleShort = l_title[0:50] + '... ({0})'.format(len(l_title))
+                else:
+                    l_titleShort = l_title
+                print('[{0:<4}] {1:<60} {2:<60}'.format(l_count, l_linkUrl, l_titleShort))
+
+                l_artList += [(l_linkUrl, l_title, l_author, l_source)]
+                l_csvOut.write('"{0}";"{1}";"{2}";"{3}"\n'.format(
+                    re.sub('"', '""', l_linkUrl),
+                    re.sub('"', '""', l_title),
+                    re.sub('"', '""', l_author),
+                    re.sub('"', '""', l_source),
+                ))
 
                 l_count += 1
 
@@ -185,8 +233,7 @@ if __name__ == "__main__":
         print('pdf link not found ... Something is not right')
 
     l_driver.close()
+    l_csvOut.close()
 
-    for l_link in l_linkList:
-        l_driver = getDriver()
-        processLink(l_link, l_driver)
-        l_driver.close()
+    for l_article in l_artList:
+        processLink(l_article)
