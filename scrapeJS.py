@@ -94,10 +94,12 @@ def randomWait(p_minDelay, p_maxDelay):
         print('Waiting for {0:.2f} seconds ...'.format(l_wait))
         time.sleep(l_wait)
 
-def processLink(p_article):
-    l_driver = getDriver()
-
+def processLink(p_article, p_csvOut):
+    l_newFileName = re.sub(r'\W+', '_', p_article[1])[0:40] + '-' + \
+                    re.sub('\W+', '_', p_article[2])[0:40] + '.pdf'
+    l_newFileName = re.sub(r'_+', '_', l_newFileName)
     l_linkUrl = p_article[0]
+
     l_match = re.search(r'([^/]+\.pdf)$', l_linkUrl)
     if l_match:
         l_fileName = l_match.group(1)
@@ -105,37 +107,73 @@ def processLink(p_article):
         print('cannot find filename in [{0}] - ABORTING'.format(l_linkUrl))
         sys.exit()
 
-    print('Load url Link:', l_linkUrl, '-->', l_fileName)
+    if os.path.isfile(l_newFileName) and os.stat(l_newFileName).st_size == 0:
+        os.remove(l_newFileName)
+        if os.path.isfile(l_fileName):
+            os.remove(l_fileName)
+        if os.path.isfile(l_fileName + '.part'):
+            os.remove(l_fileName + '.part')
 
-    # p_link.click()
-    l_driver.get(l_linkUrl)
+    if os.path.isfile(l_newFileName):
+        print('Already downloaded:', l_newFileName)
+    else:
+        l_finished = False
+        while not l_finished:
+            l_driver = getDriver()
 
-    try:
-        l_accept = WebDriverWait(l_driver, 10).until(EC.presence_of_element_located(
-            (By.XPATH, '//input[@id="acceptTC"]')))
+            print('Load url Link:', l_linkUrl, '-->', l_fileName)
+            # p_link.click()
+            l_driver.get(l_linkUrl)
 
-        print('Click Accept TC')
-        l_accept.click()
+            try:
+                l_accept = WebDriverWait(l_driver, 10).until(EC.presence_of_element_located(
+                    (By.XPATH, '//input[@id="acceptTC"]')))
 
-    except EX.ElementNotVisibleException:
-        print('Accept TC not visible')
-    except EX.TimeoutException:
-        print('Accept TC pop-up not found!!')
-        sys.exit()
+                print('Click Accept TC')
+                l_accept.click()
+                l_finished = True
 
-    while not (os.path.isfile(l_fileName) and not os.path.isfile(l_fileName + '.part')):
-        time.sleep(1)
-    print('download of [{0}] complete'.format(l_fileName))
+            except EX.ElementNotVisibleException:
+                print('Accept TC not visible')
+            except EX.TimeoutException:
+                print('Accept TC pop-up not found!!')
+            except Exception as e:
+                print('Unknown Exception', e)
+                sys.exit()
 
-    l_newFileName = re.sub(r'\W+', '_', p_article[1])[0:40] + '-' + \
-                    re.sub('\W+', '_', p_article[2])[0:40] + '.pdf'
-    l_newFileName = re.sub(r'_+', '_', l_newFileName)
-    print('renaming to:', l_newFileName)
-    os.rename(l_fileName, l_newFileName)
+            if l_finished:
+                l_count = 0
+                while not (os.path.isfile(l_fileName) and not os.path.isfile(l_fileName + '.part')):
+                    time.sleep(1)
+                    l_count += 1
+                    print('Waiting ...', l_count, end='\r')
 
-    randomWait(5, 10)
+                    if l_count > 60*5:
+                        l_finished = False
+                        if os.path.isfile(l_fileName):
+                            os.remove(l_fileName)
+                        if os.path.isfile(l_fileName + '.part'):
+                            os.remove(l_fileName + '.part')
+                        break
 
-    l_driver.close()
+                if l_finished:
+                    print('download of [{0}] complete'.format(l_fileName))
+
+                    time.sleep(.5)
+                    print('renaming to:', l_newFileName)
+                    os.rename(l_fileName, l_newFileName)
+
+                    randomWait(5, 10)
+
+            l_driver.close()
+
+    p_csvOut.write('"{0}";"{1}";"{2}";"{3}";"{4}\n'.format(
+        re.sub('"', '""', l_linkUrl),
+        re.sub('"', '""', l_newFileName),
+        re.sub('"', '""', l_title),
+        re.sub('"', '""', l_author),
+        re.sub('"', '""', l_source),
+    ))
 
 # --------------------------------- Main section -----------------------------------------------------------------------
 if __name__ == "__main__":
@@ -167,10 +205,6 @@ if __name__ == "__main__":
     l_kwString = '&'.join(['q{0}={1}'.format(i, l_listKW[i]) for i in range(len(l_listKW))])
 
     l_driver.get(g_url.format(l_kwString + '&', 'ar=on&'))
-
-    l_csvFileName = re.sub('\W+', '_', c.keywords) + '.csv'
-    l_csvOut = open(l_csvFileName, 'w')
-    l_csvOut.write('"URL";"TITLE";"AUTHOR";"SOURCE"\n')
 
     l_artList = []
     try:
@@ -206,12 +240,7 @@ if __name__ == "__main__":
                 print('[{0:<4}] {1:<60} {2:<60}'.format(l_count, l_linkUrl, l_titleShort))
 
                 l_artList += [(l_linkUrl, l_title, l_author, l_source)]
-                l_csvOut.write('"{0}";"{1}";"{2}";"{3}"\n'.format(
-                    re.sub('"', '""', l_linkUrl),
-                    re.sub('"', '""', l_title),
-                    re.sub('"', '""', l_author),
-                    re.sub('"', '""', l_source),
-                ))
+
 
                 l_count += 1
 
@@ -233,7 +262,15 @@ if __name__ == "__main__":
         print('pdf link not found ... Something is not right')
 
     l_driver.close()
-    l_csvOut.close()
 
+    l_csvFileName = re.sub('\W+', '_', c.keywords) + '.csv'
+    l_csvOut = open(l_csvFileName, 'w')
+    l_csvOut.write('"URL";"FILE";"TITLE";"AUTHOR";"SOURCE"\n')
+
+    l_count = 0
     for l_article in l_artList:
-        processLink(l_article)
+        print('------------[{0}]---------------------------'.format(l_count))
+        processLink(l_article, l_csvOut)
+        l_count += 1
+
+    l_csvOut.close()
